@@ -54,6 +54,7 @@
 #include "player.h"
 #include "rtp.h"
 #include "mdns.h"
+#include "metadata.h"
 
 #ifdef AF_INET6
 #define INETx_ADDRSTRLEN INET6_ADDRSTRLEN
@@ -416,7 +417,7 @@ static void handle_flush(rtsp_conn_info *conn,
     char *p;
     uint32_t rtptime=0;
     char * hdr = msg_get_header(req,"RTP-Info");
-    
+
     if (hdr) {
       // debug(1,"FLUSH message received: \"%s\".",hdr);
       // get the rtp timestamp
@@ -446,7 +447,7 @@ static void handle_setup(rtsp_conn_info *conn,
       active_remote = strtoul(ar,&p,10);
       // debug(1,"Active Remote is %u.",active_remote);
     }
-    
+
     if (config.userSuppliedLatency==0) {
       char * ua = msg_get_header(req,"User-Agent");
       if (!ua) {
@@ -501,7 +502,7 @@ static void handle_setup(rtsp_conn_info *conn,
       if (q++)
         strcat(hdr,q); // should unsplice the timing port entry
     }
-    
+
     player_play(&conn->stream);
 
     char *resphdr = malloc(200);
@@ -545,6 +546,85 @@ static void handle_set_parameter(rtsp_conn_info *conn,
 
     resp->respcode = 200;
 }
+
+static void handle_set_parameter_metadata(rtsp_conn_info *conn,
+rtsp_message   *req,
+rtsp_message   *resp) {
+  char *cp = req->content;
+  int cl   = req->contentlength;
+  unsigned int off = 8;
+  while (off < cl) {
+    char tag[5];
+    strncpy(tag, cp+off, 4);
+    tag[4] = '\0';
+    off += 4;
+    uint32_t vl = ntohl(*(uint32_t *)(cp+off));
+    off += sizeof(uint32_t);
+    char *val = malloc(vl+1);
+    strncpy(val, cp+off, vl);
+    val[vl] = '\0';
+    off += vl;
+    debug(2, "Tag: %s   Content: %s\n", tag, val);
+    if (!strncmp(tag, "asal ", 4)) {
+      debug(1, "META Album: %s\n", val);
+      metadata_set(&player_meta.album, val);
+    } else if (!strncmp(tag, "asar ", 4)) {
+      debug(1, "META Artist: %s\n", val);
+      metadata_set(&player_meta.artist, val);
+    } else if (!strncmp(tag, "ascm ", 4)) {
+      debug(1, "META Comment: %s\n", val);
+      metadata_set(&player_meta.comment, val);
+    } else if (!strncmp(tag, "asgn ", 4)) {
+      debug(1, "META Genre: %s\n", val);
+      metadata_set(&player_meta.genre, val);
+    } else if (!strncmp(tag, "minm ", 4)) {
+      debug(1, "META Title: %s\n", val);
+      metadata_set(&player_meta.title, val);
+    }
+    free(val);
+  }
+  metadata_write();
+}
+static void handle_set_parameter_coverart(rtsp_conn_info *conn,
+rtsp_message *req, rtsp_message *resp) {
+  char *cp = req->content;
+  int cl = req->contentlength;
+  char *ct = msg_get_header(req, "Content-Type");
+  if (!strncmp(ct, "image/jpeg", 10)) {
+    metadata_cover_image(cp, cl, "jpg");
+  } else if (!strncmp(ct, "image/png", 9)) {
+    metadata_cover_image(cp, cl, "png");
+  } else {
+    metadata_cover_image(NULL, 0, NULL);
+  }
+}
+
+static void handle_set_parameter(rtsp_conn_info *conn,
+rtsp_message *req, rtsp_message *resp) {
+  if (!req->contentlength)
+    debug(1, "received empty SET_PARAMETER request\n");
+    char *ct = msg_get_header(req, "Content-Type");
+    if (ct) {
+      debug(2, "SET_PARAMETER Content-Type: %s\n", ct);
+      if (!strncmp(ct, "application/x-dmap-tagged", 25)) {
+        debug(1, "received metadata tags in SET_PARAMETER request\n");
+        handle_set_parameter_metadata(conn, req, resp);
+      } else if (!strncmp(ct, "image/jpeg", 10) ||
+      !strncmp(ct, "image/png", 9)   ||
+      !strncmp(ct, "image/none", 10)) {
+        debug(1, "received image in SET_PARAMETER request\n");
+        handle_set_parameter_coverart(conn, req, resp);
+      } else if (!strncmp(ct, "text/parameters", 15)) {
+        debug(1, "received parameters in SET_PARAMETER request\n");
+        handle_set_parameter_parameter(conn, req, resp);
+      } else {
+        debug(1, "received unknown Content-Type %s in SET_PARAMETER request\n", ct);
+      }
+    } else {
+      debug(1, "missing Content-Type header in SET_PARAMETER request\n");
+    }
+    resp->respcode = 200;
+  }
 
 static void handle_announce(rtsp_conn_info *conn,
                             rtsp_message *req, rtsp_message *resp) {
@@ -601,7 +681,7 @@ static void handle_announce(rtsp_conn_info *conn,
     int i;
     for (i=0; i<sizeof(conn->stream.fmtp)/sizeof(conn->stream.fmtp[0]); i++)
       conn->stream.fmtp[i] = atoi(strsep(&pfmtp, " \t"));
-    
+
     char *hdr = msg_get_header(req, "X-Apple-Client-Name");
     if (hdr)
       debug(1,"Play connection from \"%s\".",hdr);
@@ -742,10 +822,10 @@ static int rtsp_auth(char **nonce, rtsp_message *req, rtsp_message *resp) {
     *quote = 0;
 
     uint8_t digest_urp[16], digest_mu[16], digest_total[16];
-    
+
 #ifdef HAVE_LIBSSL
     MD5_CTX ctx;
-    
+
     MD5_Init(&ctx);
     MD5_Update(&ctx, username, strlen(username));
     MD5_Update(&ctx, ":", 1);
@@ -760,7 +840,7 @@ static int rtsp_auth(char **nonce, rtsp_message *req, rtsp_message *resp) {
     MD5_Final(digest_mu, &ctx);
 #endif
 
-    
+
 #ifdef HAVE_LIBPOLARSSL
     md5_context tctx;
     md5_starts(&tctx);
@@ -776,12 +856,12 @@ static int rtsp_auth(char **nonce, rtsp_message *req, rtsp_message *resp) {
     md5_update(&tctx, (const unsigned char *)uri, strlen(uri));
     md5_finish(&tctx,digest_mu);
 #endif
-    
+
     int i;
     unsigned char buf[33];
     for (i=0; i<16; i++)
         sprintf((char *)buf + 2*i, "%02X", digest_urp[i]);
-        
+
 #ifdef HAVE_LIBSSL
     MD5_Init(&ctx);
     MD5_Update(&ctx, buf, 32);
@@ -794,7 +874,7 @@ static int rtsp_auth(char **nonce, rtsp_message *req, rtsp_message *resp) {
     MD5_Final(digest_total, &ctx);
     #endif
 
-    
+
 #ifdef HAVE_LIBPOLARSSL
     md5_starts(&tctx);
     md5_update(&tctx, buf, 32);
@@ -913,7 +993,7 @@ void rtsp_listen_loop(void) {
     hints.ai_flags = AI_PASSIVE;
 
     snprintf(portstr, 6, "%d", config.port);
-    
+
     // debug(1,"listen socket port request is \"%s\".",portstr);
 
     ret = getaddrinfo(NULL, portstr, &hints, &info);

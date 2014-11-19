@@ -51,6 +51,7 @@
 #include "rtsp.h"
 #include "rtp.h"
 #include "mdns.h"
+#include "metadata.h"
 
 #include <libdaemon/dfork.h>
 #include <libdaemon/dsignal.h>
@@ -171,6 +172,7 @@ void usage(char *progname) {
     printf("                            For -B and -E options, specify the full path to the program, e.g. /usr/bin/logger.\n");
     printf("                            Executable scripts work, but must have #!/bin/sh (or whatever) in the headline.\n");
     printf("    -w, --wait-cmd          wait until the -B or -E programs finish before continuing\n");
+		printf("    -M, --meta-dir=DIR      set a directory to write metadata and album cover art to\n");
     printf("    -o, --output=BACKEND    select audio output method\n");
     printf("    -m, --mdns=BACKEND      force the use of BACKEND to advertize the service\n");
     printf("                            if no mdns provider is specified,\n");
@@ -202,6 +204,7 @@ int parse_options(int argc, char **argv) {
     { "on-start", 'B', POPT_ARG_STRING, &config.cmd_start, 0, NULL } ,
     { "on-stop", 'E', POPT_ARG_STRING, &config.cmd_stop, 0, NULL } ,
     { "wait-cmd", 'w', POPT_ARG_NONE, &config.cmd_blocking, 0, NULL } ,
+		{ "meta-dir", 'M', POPT_ARG_STRING, &config.meta_dir, 0, NULL } ,
     { "mdns", 'm', POPT_ARG_STRING, &config.mdns_name, 0, NULL } ,
     { "latency", 'L', POPT_ARG_INT, &config.userSuppliedLatency, 0, NULL } ,
     { "AirPlayLatency", 'A', POPT_ARG_INT, &config.AirPlayLatency, 0, NULL } ,
@@ -212,13 +215,13 @@ int parse_options(int argc, char **argv) {
     POPT_AUTOHELP
     { NULL, 0, 0, NULL, 0 }
   };
-  
+
   int optind=argc;
   int j;
   for (j=0;j<argc;j++)
     if (strcmp(argv[j],"--")==0)
       optind=j;
-  
+
   optCon = poptGetContext(NULL, optind,(const char **)argv, optionsTable, 0);
   poptSetOtherOptionHelp(optCon, "[OPTIONS]* ");
 
@@ -229,7 +232,7 @@ int parse_options(int argc, char **argv) {
         debuglev++;
         break;
       case 'S':
-        if (strcmp(stuffing,"basic")==0)           		
+        if (strcmp(stuffing,"basic")==0)
           config.packet_stuffing = ST_basic;
         else if (strcmp(stuffing,"soxr")==0)
 #ifdef HAVE_LIBSOXR
@@ -246,7 +249,7 @@ int parse_options(int argc, char **argv) {
     die("%s: %s",poptBadOption(optCon, POPT_BADOPTION_NOALIAS),poptStrerror(c));
   }
   /* Print out options */
-  
+
   debug(2,"daemon status is %d.",config.daemonise);
   debug(2,"rtsp listening port is %d.",config.port);
   debug(2,"Shairport Sync player name is \"%s\".",config.apname);
@@ -254,6 +257,7 @@ int parse_options(int argc, char **argv) {
   debug(2,"on-start action is \"%s\".",config.cmd_start);
   debug(2,"on-stop action is \"%s\".",config.cmd_stop);
   debug(2,"wait-cmd status is %d.",config.cmd_blocking);
+	debug(2,"meta-dir is \"%s\".",config.meta_dir);
   debug(2,"mdns backend \"%s\".",config.mdns_name);
   debug(2,"latency is %d.",config.userSuppliedLatency);
   debug(2,"AirPlayLatency is %d.",config.AirPlayLatency);
@@ -261,7 +265,7 @@ int parse_options(int argc, char **argv) {
   debug(2,"stuffing option is \"%s\".",stuffing);
   debug(2,"resync time is %d.",config.resyncthreshold);
   debug(2,"busy timeout time is %d.",config.timeout);
-  
+
   return optind+1;
 }
 
@@ -346,7 +350,7 @@ int main(int argc, char **argv) {
     config.apname = malloc(20 + 100);
     snprintf(config.apname, 20 + 100, "Shairport Sync on %s", hostname);
     set_requested_connection_state_to_output(1); // we expect to be able to connect to the output device
-    
+
     /* Check if we are called with -V or --version parameter */
     if (argc >= 2 && ((strcmp(argv[1], "-V")==0) || (strcmp(argv[1], "--version")==0))) {
       print_version();
@@ -372,8 +376,8 @@ int main(int argc, char **argv) {
         daemon_log(LOG_ERR, "Failed to unblock all signals: %s", strerror(errno));
         return 1;
     }
-    
-    
+
+
 #if USE_CUSTOM_LOCAL_STATE_DIR
     debug(1,"Locating localstatedir at \"%s\"",LOCALSTATEDIR);
     /* Point to a function to help locate where the PID file will go */
@@ -382,7 +386,7 @@ int main(int argc, char **argv) {
 
     /* Set indentification string for the daemon for both syslog and PID file */
     daemon_pid_file_ident = daemon_log_ident = daemon_ident_from_argv0(argv[0]);
-    
+
     /* Check if we are called with -D or --disconnectFromOutput parameter */
     if (argc >= 2 && ((strcmp(argv[1], "-D")==0) || (strcmp(argv[1], "--disconnectFromOutput")==0))) {
       if ((pid = daemon_pid_file_is_running()) >= 0) {
@@ -394,7 +398,7 @@ int main(int argc, char **argv) {
       }
       exit(1);
     }
-      
+
     /* Check if we are called with -R or --reconnectToOutput parameter */
     if (argc >= 2 && ((strcmp(argv[1], "-R")==0) || (strcmp(argv[1], "--reconnectToOutput")==0))) {
       if ((pid = daemon_pid_file_is_running()) >= 0) {
@@ -406,7 +410,7 @@ int main(int argc, char **argv) {
       }
       exit(1);
     }
-      
+
     /* Check if we are called with -k or --kill parameter */
     if (argc >= 2 && ((strcmp(argv[1], "-k")==0) || (strcmp(argv[1], "--kill")==0))) {
       int ret;
@@ -432,9 +436,9 @@ int main(int argc, char **argv) {
     // mDNS supports maximum of 63-character names (we append 13).
     if (strlen(config.apname) > 50)
         die("Supplied name too long (max 50 characters)");
-   
+
     /* here, daemonise with libdaemon */
-    
+
     if (config.daemonise) {
       /* Prepare for return value passing from the initialization procedure of the daemon process */
       if (daemon_retval_init() < 0) {
@@ -458,7 +462,7 @@ int main(int argc, char **argv) {
               return 255;
           }
 
-          if (ret != 0) 
+          if (ret != 0)
           	daemon_log(ret != 0 ? LOG_ERR : LOG_INFO, "Daemon returned %i as return value.", ret);
           return ret;
 
@@ -472,14 +476,14 @@ int main(int argc, char **argv) {
               daemon_retval_send(1);
               goto finish;
           }
-          
+
           /* Create the PID file */
           if (daemon_pid_file_create() < 0) {
               daemon_log(LOG_ERR, "Could not create PID file (%s).", strerror(errno));
               daemon_retval_send(2);
               goto finish;
           }
-                    
+
           /* Send OK to parent process */
           daemon_retval_send(0);
       }
@@ -514,6 +518,8 @@ int main(int argc, char **argv) {
 #endif
     memcpy(config.hw_addr, ap_md5, sizeof(config.hw_addr));
 
+		if (config.meta_dir)
+			metadata_open();
     rtsp_listen_loop();
 
     // should not reach this...
