@@ -521,30 +521,27 @@ static void handle_ignore(rtsp_conn_info *conn,
     resp->respcode = 200;
 }
 
-static void handle_set_parameter(rtsp_conn_info *conn,
-                                 rtsp_message *req, rtsp_message *resp) {
-    if (!req->contentlength)
-        debug(1, "received empty SET_PARAMETER request.");
+static void handle_set_parameter_parameter(rtsp_conn_info *conn,
+rtsp_message *req, rtsp_message *resp) {
+  char *cp = req->content;
+  int cp_left = req->contentlength;
+  char *next;
+  while (cp_left && cp) {
+    next = nextline(cp, cp_left);
+    cp_left -= next-cp;
 
-    char *cp = req->content;
-    int cp_left = req->contentlength;
-    char *next;
-    while (cp_left && cp) {
-        next = nextline(cp, cp_left);
-        cp_left -= next-cp;
-
-        if (!strncmp(cp, "volume: ", 8)) {
-            float volume = atof(cp + 8);
-            // debug(1, "volume: %f.", volume);
-            player_volume(volume);
-        } else {
-            debug(1, "unrecognised parameter: >>%s<< (%d).", cp, strlen(cp));
-        }
-        cp = next;
+    if (!strncmp(cp, "volume: ", 8)) {
+      float volume = atof(cp + 8);
+      debug(1, "volume: %f\n", volume);
+      player_volume(volume);
+    } else if(!strncmp(cp, "progress: ", 10)) {
+      char *progress = cp + 10;
+      debug(1, "progress: %s\n", progress);
+    } else {
+      debug(1, "unrecognised parameter: >>%s<< (%d)\n", cp, strlen(cp));
     }
-
-
-    resp->respcode = 200;
+    cp = next;
+  }
 }
 
 static void handle_set_parameter_metadata(rtsp_conn_info *conn,
@@ -599,32 +596,69 @@ rtsp_message *req, rtsp_message *resp) {
   }
 }
 
-static void handle_set_parameter(rtsp_conn_info *conn,
-rtsp_message *req, rtsp_message *resp) {
-  if (!req->contentlength)
-    debug(1, "received empty SET_PARAMETER request\n");
-    char *ct = msg_get_header(req, "Content-Type");
-    if (ct) {
-      debug(2, "SET_PARAMETER Content-Type: %s\n", ct);
-      if (!strncmp(ct, "application/x-dmap-tagged", 25)) {
-        debug(1, "received metadata tags in SET_PARAMETER request\n");
-        handle_set_parameter_metadata(conn, req, resp);
-      } else if (!strncmp(ct, "image/jpeg", 10) ||
-      !strncmp(ct, "image/png", 9)   ||
-      !strncmp(ct, "image/none", 10)) {
-        debug(1, "received image in SET_PARAMETER request\n");
-        handle_set_parameter_coverart(conn, req, resp);
-      } else if (!strncmp(ct, "text/parameters", 15)) {
-        debug(1, "received parameters in SET_PARAMETER request\n");
-        handle_set_parameter_parameter(conn, req, resp);
-      } else {
-        debug(1, "received unknown Content-Type %s in SET_PARAMETER request\n", ct);
+// static void handle_set_parameter(rtsp_conn_info *conn,
+// rtsp_message *req, rtsp_message *resp) {
+//   if (!req->contentlength)
+//     debug(1, "received empty SET_PARAMETER request\n");
+//     char *ct = msg_get_header(req, "Content-Type");
+//     if (ct) {
+//       debug(2, "SET_PARAMETER Content-Type: %s\n", ct);
+//       if (!strncmp(ct, "application/x-dmap-tagged", 25)) {
+//         debug(1, "received metadata tags in SET_PARAMETER request\n");
+//         handle_set_parameter_metadata(conn, req, resp);
+//       } else if (!strncmp(ct, "image/jpeg", 10) ||
+//       !strncmp(ct, "image/png", 9)   ||
+//       !strncmp(ct, "image/none", 10)) {
+//         debug(1, "received image in SET_PARAMETER request\n");
+//         handle_set_parameter_coverart(conn, req, resp);
+//       } else if (!strncmp(ct, "text/parameters", 15)) {
+//         debug(1, "received parameters in SET_PARAMETER request\n");
+//         handle_set_parameter_parameter(conn, req, resp);
+//       } else {
+//         debug(1, "received unknown Content-Type %s in SET_PARAMETER request\n", ct);
+//       }
+//     } else {
+//       debug(1, "missing Content-Type header in SET_PARAMETER request\n");
+//     }
+//     resp->respcode = 200;
+//   }
+
+  static void handle_set_parameter(rtsp_conn_info *conn,
+  rtsp_message *req, rtsp_message *resp) {
+    if (!req->contentlength)
+      debug(1, "received empty SET_PARAMETER request.");
+
+      char *cp = req->content;
+      int cp_left = req->contentlength;
+      char *next;
+      while (cp_left && cp) {
+        next = nextline(cp, cp_left);
+        cp_left -= next-cp;
+
+        if (!strncmp(cp, "volume: ", 8)) {
+          float volume = atof(cp + 8);
+          // debug(1, "volume: %f.", volume);
+          player_volume(volume);
+        } else if (!strncmp(cp, "application/x-dmap-tagged", 25)) {
+          debug(1, "received metadata tags in SET_PARAMETER request\n");
+          handle_set_parameter_metadata(conn, req, resp);
+        } else if (!strncmp(cp, "image/jpeg", 10) ||
+        !strncmp(cp, "image/png", 9)   ||
+        !strncmp(cp, "image/none", 10)) {
+          debug(1, "received image in SET_PARAMETER request\n");
+          handle_set_parameter_coverart(conn, req, resp);
+        } else if (!strncmp(cp, "text/parameters", 15)) {
+          debug(1, "received parameters in SET_PARAMETER request\n");
+          handle_set_parameter_parameter(conn, req, resp);
+        } else {
+          debug(1, "unrecognised parameter: >>%s<< (%d).", cp, strlen(cp));
+        }
+        cp = next;
       }
-    } else {
-      debug(1, "missing Content-Type header in SET_PARAMETER request\n");
+
+
+      resp->respcode = 200;
     }
-    resp->respcode = 200;
-  }
 
 static void handle_announce(rtsp_conn_info *conn,
                             rtsp_message *req, rtsp_message *resp) {
